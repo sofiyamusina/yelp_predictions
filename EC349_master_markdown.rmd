@@ -1,0 +1,508 @@
+---
+title: "EC349 Individual Project: Predicting Yelp Star Ratings"
+author: "u2102055"
+date: "2023-11-29"
+output:
+  html_document: default
+---
+
+link to [GitHub repository](https://github.com/sofiyamusina/yelp_predictions)
+
+## 1. Introduction. Methodology
+
+The variable to be predicted, review star ratings (*r_stars*), is a categorical ordinal variable taking values 1, 2, 3, 4, 5. This is a classification problem, but the natural ordering of star rating categories should be recognised.
+
+I chose to follow the BAD-RCUP-MED/F methodology. It involves 3 key sequential stages: Business & Problem Understanding, Data Understanding & Organisation, and Validation & Deployment, which I found convenient as a high-level plan for the project - whilst appreciating the flexibility of going through the Data Understanding & Organisation process in a more iterative manner.
+
+The reason I chose BAD-RCUP-MED/F over CRISP-DM has to do with Data Preparation and Data Understanding. In CRISP-DM, Understanding preceeds Preparation, whereas in BAD-RCUP-MED/F these stages are intertwined. BAD-RCUP-MED/F worked better, as I often had to clean data before attempting to extract insights, for instance when converting star ratings into a factor variable to produce visualizations.
+
+## 2. Data Preparation and Understanding
+
+### 2.1 Biggest Challenge
+
+My biggest challenge in this project was selecting the relevant predictor variables. The final predictor choice was a result of 3 processes: 
+
+- Pre-selecting predictor 'candidates' based on whether there is a plausible hypothesis for a relationship (e.g. "businesses of higher quality are expected to get better reviews").
+- Ensuring that there are sufficient observations for 'candidate' predictors.
+- Carrying out exploratory visual and correlation analysis to understand the statistical relationships between 'candidate' predictors and *r_stars*, narrowing down predictor selection.
+
+These processes constituted my data preparation and understanding stage, alongside sentiment analysis.
+
+### 2.2 Sentiment Analysis
+
+The text of reviews is processed via sentiment analysis, which involves generating a numerical value indicating the positive or negative sentiment of a text based on existing dictionaries. Two sentiment scores are created, utilising BING (see below) and AFINN dictionaries [(Silge & Robinson, 2022)](https://www.tidytextmining.com/sentiment). This allows for cross-validation of sentiment scores, and for selecting a better predictor among the 2 during model fitting:
+
+```{r eval=FALSE}
+master_sample <- master_sample %>% mutate(line=row_number())
+
+bing <- get_sentiments("bing")
+
+# Creating the tibble
+txtib <- tibble(
+  line = 1:100000,
+  text = master_sample$text
+)
+
+# Defining custom stopwords
+stop_words$word
+custom_stopwords <- stop_words$word[!str_detect(stop_words$word, "no|not|don't|won't|doesn't|isn't")]
+
+# Creating BING sentiment score with n-grams
+bing_data <- txtib %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n=2) %>%
+  filter(!is.na(bigram))
+
+bing_data <- bing_data %>% 
+  separate(bigram, c("w1","w2"), sep=" ") %>%
+  filter(!w1 %in% custom_stopwords) %>%
+  filter(!w2 %in% stop_words$word)
+
+bing_data <- bing_data %>% 
+  rename(word = w2) %>%
+  inner_join(bing) %>%
+  mutate(sentiment = if_else(str_detect(w1, "no|not|don't|won't|doesn't|isn't") & sentiment == "positive", "negative", sentiment)) %>%
+  mutate(sentiment = if_else(str_detect(w1, "no|not|don't|won't|doesn't|isn't") & sentiment == "negative", "positive", sentiment)) %>%
+  count(line, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill=0) %>%
+  mutate(bing_sentiment = positive-negative)
+
+# Merging to master
+master_sample <- merge(x=master_sample, y=bing_data, by="line", all.x=TRUE)
+sum(is.na(master_sample$bing_sentiment))/dim(master_sample)[1]*100 #0
+```
+
+Sentiment scores are normalised to reflect review length:
+
+```{r eval=FALSE}
+# Creating variable for review length:
+master_sample$revlength <- str_count(master_sample$text, " ") + 1
+
+# Normalising:
+master_sample <- master_sample %>%
+  mutate(bing_sentiment = bing_sentiment/revlength) %>%
+  mutate(afinn_sentiment = afinn_sentiment/revlength)
+```
+
+### 2.3 Exploratory Analysis Results
+
+#### 2.3.1 Correlation Analysis:
+
+<center>
+<table style="font-size:10px;width:90%;margin:0 auto;">
+ <thead>
+  <tr>
+   <th style="text-align:left;">   </th>
+   <th style="text-align:center;"> r_stars </th>
+   <th style="text-align:center;"> useful </th>
+   <th style="text-align:center;"> funny </th>
+   <th style="text-align:center;"> cool </th>
+   <th style="text-align:center;"> u_review_count </th>
+   <th style="text-align:center;"> u_average_stars </th>
+   <th style="text-align:center;"> b_stars </th>
+   <th style="text-align:center;"> b_review_count </th>
+   <th style="text-align:center;"> bing_sentiment </th>
+   <th style="text-align:center;"> afinn_sentiment </th>
+   <th style="text-align:center;"> revlength </th>
+   <th style="text-align:center;"> exclam </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> r_stars </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> -0.09 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> 0.09 </td>
+   <td style="text-align:center;"> 0.04 </td>
+   <td style="text-align:center;"> 0.59 </td>
+   <td style="text-align:center;"> 0.50 </td>
+   <td style="text-align:center;"> 0.07 </td>
+   <td style="text-align:center;"> 0.42 </td>
+   <td style="text-align:center;"> 0.43 </td>
+   <td style="text-align:center;"> -0.23 </td>
+   <td style="text-align:center;"> 0.19 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> useful </td>
+   <td style="text-align:center;"> -0.09 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.64 </td>
+   <td style="text-align:center;"> 0.74 </td>
+   <td style="text-align:center;"> 0.31 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> -0.12 </td>
+   <td style="text-align:center;"> -0.11 </td>
+   <td style="text-align:center;"> 0.29 </td>
+   <td style="text-align:center;"> -0.08 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> funny </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> 0.64 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.73 </td>
+   <td style="text-align:center;"> 0.30 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> -0.08 </td>
+   <td style="text-align:center;"> -0.07 </td>
+   <td style="text-align:center;"> 0.19 </td>
+   <td style="text-align:center;"> -0.05 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> cool </td>
+   <td style="text-align:center;"> 0.09 </td>
+   <td style="text-align:center;"> 0.74 </td>
+   <td style="text-align:center;"> 0.73 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.38 </td>
+   <td style="text-align:center;"> 0.08 </td>
+   <td style="text-align:center;"> 0.07 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> -0.03 </td>
+   <td style="text-align:center;"> 0.17 </td>
+   <td style="text-align:center;"> -0.04 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> u_review_count </td>
+   <td style="text-align:center;"> 0.04 </td>
+   <td style="text-align:center;"> 0.31 </td>
+   <td style="text-align:center;"> 0.30 </td>
+   <td style="text-align:center;"> 0.38 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.06 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> 0.17 </td>
+   <td style="text-align:center;"> -0.08 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> u_average_stars </td>
+   <td style="text-align:center;"> 0.59 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> 0.08 </td>
+   <td style="text-align:center;"> 0.06 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.32 </td>
+   <td style="text-align:center;"> 0.06 </td>
+   <td style="text-align:center;"> 0.26 </td>
+   <td style="text-align:center;"> 0.27 </td>
+   <td style="text-align:center;"> -0.12 </td>
+   <td style="text-align:center;"> 0.11 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> b_stars </td>
+   <td style="text-align:center;"> 0.50 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> 0.07 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 0.32 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.14 </td>
+   <td style="text-align:center;"> 0.22 </td>
+   <td style="text-align:center;"> 0.23 </td>
+   <td style="text-align:center;"> -0.11 </td>
+   <td style="text-align:center;"> 0.08 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> b_review_count </td>
+   <td style="text-align:center;"> 0.07 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> 0.00 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 0.06 </td>
+   <td style="text-align:center;"> 0.14 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> 0.01 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> bing_sentiment </td>
+   <td style="text-align:center;"> 0.42 </td>
+   <td style="text-align:center;"> -0.12 </td>
+   <td style="text-align:center;"> -0.08 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> 0.26 </td>
+   <td style="text-align:center;"> 0.22 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> 0.78 </td>
+   <td style="text-align:center;"> -0.29 </td>
+   <td style="text-align:center;"> 0.25 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> afinn_sentiment </td>
+   <td style="text-align:center;"> 0.43 </td>
+   <td style="text-align:center;"> -0.11 </td>
+   <td style="text-align:center;"> -0.07 </td>
+   <td style="text-align:center;"> -0.03 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> 0.27 </td>
+   <td style="text-align:center;"> 0.23 </td>
+   <td style="text-align:center;"> 0.03 </td>
+   <td style="text-align:center;"> 0.78 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> -0.26 </td>
+   <td style="text-align:center;"> 0.28 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> revlength </td>
+   <td style="text-align:center;"> -0.23 </td>
+   <td style="text-align:center;"> 0.29 </td>
+   <td style="text-align:center;"> 0.19 </td>
+   <td style="text-align:center;"> 0.17 </td>
+   <td style="text-align:center;"> 0.17 </td>
+   <td style="text-align:center;"> -0.12 </td>
+   <td style="text-align:center;"> -0.11 </td>
+   <td style="text-align:center;"> -0.01 </td>
+   <td style="text-align:center;"> -0.29 </td>
+   <td style="text-align:center;"> -0.26 </td>
+   <td style="text-align:center;"> 1.00 </td>
+   <td style="text-align:center;"> -0.21 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> exclam </td>
+   <td style="text-align:center;"> 0.19 </td>
+   <td style="text-align:center;"> -0.08 </td>
+   <td style="text-align:center;"> -0.05 </td>
+   <td style="text-align:center;"> -0.04 </td>
+   <td style="text-align:center;"> -0.08 </td>
+   <td style="text-align:center;"> 0.11 </td>
+   <td style="text-align:center;"> 0.08 </td>
+   <td style="text-align:center;"> 0.01 </td>
+   <td style="text-align:center;"> 0.25 </td>
+   <td style="text-align:center;"> 0.28 </td>
+   <td style="text-align:center;"> -0.21 </td>
+   <td style="text-align:center;"> 1.00 </td>
+  </tr>
+</tbody>
+</table>
+</center>
+<br>
+The main takeaways from the correlation analysis are:
+
+- *u_average_stars*, *b_stars*, *afinn_sentiment* and *bing_sentiment* are likely to be the best predictors due to high correlation with *r_stars*.
+
+- *afinn_sentiment* and *bing_sentiment* should not be used simultaneously in regressions due to multicollinearity. The same applies to *useful* and *cool*.
+
+#### 2.3.2 Descriptive Visualisations:
+
+<center>![](stars.png){width="40%"}</center>
+
+<p style="text-align:left;">
+
+A sufficient amount of observations is present for every value of *r_stars*, however the number of 5-star reviews creates sampling bias concerns.
+
+</p>
+
+<div>
+
+</div>
+
+<center>![](usr_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+There is a positive linear relationship between *u_average_stars* and *r_stars*, supporting the hypothesis that some users are generally likely to give better/worse ratings. The violin plot shows a high density of reviews in the (1;1) and (5;5) regions, which can be exploited in classification models.
+
+</p>
+
+<center>![](business_stars.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+There is a positive linear relationship between *b_stars* and *r_stars* - perhaps because better businesses get better reviews. The count plot shows the increased likelihood of businesses with \<3 stars to generate 1-star reviews, the same is true about businesses rated 4.5-5 and 5-star reviews.
+
+</p>
+
+<center>
+
+![](useful_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+The bar plot of average 'useful' votes seems to show that people find better reviews less useful. Intuitively, this might occur because users value information about places to avoid.
+
+</p>
+
+<center>![](cool_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+The bar plot for the mean of 'cool' votes shows a positive relationship but peaks at 4-star reviews. One intuition for this is that people might be relatively more happy about discovering good businesses, therefore rate the review as 'cool'.
+
+</p>
+
+<center>![](funny_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+*funny* might not be as useful in a prediction model as *useful* or *cool*. The rationale for including this variable was that 'extreme' reviews (1 or 5) tend to be more emotionally charged and can generate more 'funny' votes, but this is clearly not the case.
+
+</p>
+
+<center>![](revcount_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+The inclusion of *u_review_counts* was guided by the idea that more experienced users (with more total reviews) are less likely to give 'extreme' ratings, e.g. 1 or 5. The bar plot supports this reasoning. The violin plot shows relatively balanced distributions of *u_review_count* except for 1-star reviews, suggesting that some users mostly use Yelp to express disappointment via 1-star reviews.
+
+</p>
+
+<center>![](len_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+The inclusion of the *revlength* (total number of words in review) was guided by the hypothesis that people tend to elaborate on the bad aspects rather than good ones - which the above plots support.
+
+</p>
+
+<center>![](exclam_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+Selecting the total number of exclamation marks in a review was guided by the idea that extreme opinions, e.g. those resulting in 1 or 5 star ratings, are more likely to generate emotionally charged reviews, which punctuation reflects. The bar plot confirms this reasoning.
+
+</p>
+
+<center>![](afinn_comb.png){width="70%"} ![](bing_comb.png){width="70%"}</center>
+
+<p style="text-align:left;">
+
+The distribution of mean sentiment scores across review star ratings is unsurprising: sentiment scores are increasing in review stars. *afinn_sentiment* and *bing_sentiment* can be useful predictors in both regression and classification scenarios.
+
+</p>
+
+### 2.4 Results Table
+
+<div style="font-size:11px;width:90%;margin:0 auto;">
+
+| Variable name   | Variable description                                                 | Include in regression? | Include in classification? |
+|:-----------------:|:----------------------:|:-----------------:|:-----------------:|
+| u_average_stars | Average stars across reviews of a given user                         | Yes                    | Yes                        |
+| b_stars         | Business stars                                                       | Yes                    | Yes                        |
+| useful          | Number of 'useful' votes on the review                               | Yes                    | Yes                        |
+| cool            | Number of 'cool' votes on the review                                 | Yes                    | Yes                        |
+| funny           | Number of 'funny' votes on the review                                | No                     | No                         |
+| u_review_count  | Number of reviews a given user created                               | No                     | Yes                        |
+| revlength       | Number of words in a review                                          | Yes                    | Yes                        |
+| exclam          | Number of exclamation marks in a review, normalised by review length | No                     | Yes                        |
+| bing_sentiment  | Bing sentiment score, normalised by review length                    | Yes                    | Yes                        |
+| afinn_sentiment | Afinn sentiment score, normalised by review length                   | Yes                    | Yes                        |
+</div>
+## 3. Modelling and Evaluation
+
+I estimate 3 models, including 3 specifications for each to assess the importance of different predictor groups.
+
+### 3.1 Models
+
+**Ordered Logit** is the first model, reflecting the smooth trends of several predictors' means across *r_star* categories (see 2.3.2). It is chosen over Ridge and Lasso to capture the non-linearities in coefficients, and because it is most suited to classifying categories with a natural ordering:
+
+```{r eval=FALSE}
+# Ordered logit with full set of covariates (Specification 1)
+OL1 <- polr(r_stars ~ 
+              u_average_stars +
+              b_stars +
+              afinn_sentiment +
+              cool +
+              revlength, 
+            data = master_train,
+            method = "logistic")
+```
+
+**A Simple Decision Tree** is the next model. More flexible than logit, it allows to capture information from variables like *exclam* or *revlength* which do not exhibit a "smooth trend" over *r_stars*.
+
+```{r eval=FALSE}
+# Decision Tree with full set of covariates (Spec. 1):
+DT1 <- rpart(r_stars ~ 
+               u_average_stars +
+               b_stars +
+               afinn_sentiment +
+               bing_sentiment +
+               u_review_count +
+               revlength +
+               exclam + 
+               useful +
+               cool,
+             data = master_train,
+             method = "class",
+             cp=0.0003)
+```
+
+**Random Forest** is the final model. An extension of the decision tree, it reduces the predictions' variance by 'destroying' the correlations between covariates (see 2.3.1 for variables with high correlation). The tradeoff is reduced interpretability.
+
+```{r eval=FALSE}
+# Random Forest with full set of covariates (Spec. 1):
+RT1 <- randomForest(r_stars ~ 
+                      u_average_stars +
+                      b_stars +
+                      afinn_sentiment +
+                      bing_sentiment +
+                      u_review_count +
+                      revlength +
+                      exclam + 
+                      useful +
+                      cool,
+                    data = master_train,
+                    nodesize = 200,
+                    ntree=200)
+```
+
+### 3.2 Evaluation
+
+The below table presents the accuracy (% correct predictions) of all estimated models ("test / training%"):
+<br>
+<div style="font-size:11px;width:90%;margin:0 auto;">
+
+|               | All covariates | Sentiment-related covariates only | \*u_average_stars\* and \*b_stars\* only |
+|-----------------|:-----------------:|:-----------------:|:--------------------:|
+| Ordered Logit | 57.23 / 57.82% | 50.80 / 51.39%                    | 54.44 / 55.44%                           |
+| Decision Tree | 60.57 / 63.16% | 53.49 / 54.71%                    | 55.83 / 56.83%                           |
+| Random Forest | 61.03 / 63.87% | 53.70 / 55.30%                    | 55.64 / 55.51%                           |
+</div>
+
+The below table indicates the review star categories NOT predicted by the model:
+<br>
+<div style="font-size:11px;width:90%;margin:0 auto;">
+|               | All covariates | Sentiment-related covariates only | \*u_average_stars\* and \*b_stars\* only |
+|-----------------|:-----------------:|:-----------------:|:--------------------:|
+| Ordered Logit | 2, 3           | 1, 2, 3, 4                        | 2, 3                                     |
+| Decision Tree | n/a            | n/a                               | 3                                        |
+| Random Forest | n/a            | 2, 3                              | 2, 3                                     |
+</div>
+
+**The key takeaways are**:
+
+-   There are no overfitting issues.
+
+-   In all 3 models the highest information gain comes from *u_average_rating* and *b_rating*.
+
+-   Sentiment scores used in isolation predict \~50% of observations correctly, but fail to predict some categories completely.
+
+-   Categories 2 and 3 are most challenging to predict even for the better-performing models.
+
+-   The best model is Random Forest, producing an accuracy of 61.03% and predicting all classes.
+
+## 4. Conclusion
+
+### 4.1 Analysis Limitations
+
+1.  **Variable selection.** All models displayed similar trends across specifications: the chosen predictors bring similar information gains regardless of the model. Therefore, a key limitation is the choice of predictors itself. Using other variables might improve the models' accuracy. When pre-selecting predictors, I focused on those 'plausibly' related to *r_stars*, however for predictive purposes this line of reasoning is not as important as in causal regressions.
+2.  **Imperfect sentiment dictionaries.** AFINN and BING sentiment dictionaries are general-purpose, and do not include context-specific vocabulary. For instance, the [AFINN](https://github.com/fnielsen/afinn/blob/master/afinn/data/AFINN-en-165.txt) sentiment lexicon does not contain words such as 'loud' 'hungry', 'waited' or 'long', which all indicate sentiment in restaurant reviews. One way to address this is introducing custom lists of positive/negative sentiment.
+3.  **Overrepresentation of 5-star reviews.** There is an unusually high amount of 5-star reviews in the data. This makes it more challenging for models to pick up differences between classes, and limits the models' external validity. One approach to tackle this is stratification.
+
+## 5. References
+
+Silge, J., Robinson, D., 2022. 'Text Mining with R: A Tidy Approach' (Chapters 2, 4) Available at: [https://www.tidytextmining.com/](https://www.tidytextmining.com/) (Last accessed 25 November 2023)
